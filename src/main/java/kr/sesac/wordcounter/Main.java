@@ -45,10 +45,10 @@ public class Main {
                                     .append("\n분석 완료\n")
                                     .append("입력: " + analyze.getInputPath() + "\n")
                                     .append("파일: 시도 " + analyze.getTryCount() + "개 / 성공 " + analyze.getSuccessCount() + "개 / 실패 " +analyze.getFailCount() + "개 / 지원하지 않아 건너뜀 " + analyze.getSkipCount() + "개\n")
-                                    .append("전체 단어: " + analyze.getAnalyzerDTO().getTotalWordCount() + "개 / 서로 다른 단어: " + analyze.getAnalyzerDTO().getDifferentWordCount() + "개\n")
+                                    .append("전체 단어: " + analyze.getWordCount().getTotalWord() + "개 / 서로 다른 단어: " + analyze.getWordCount().getDifferentWord() + "개\n")
                                     .append("처리 시간: " + String.format("%.1fms",analyze.getElapsedTime()) + "\n");
                             System.out.println(summary);
-                            wordCount = analyze.getAnalyzerDTO().getWordCount().sortWordCounter();
+                            wordCount = analyze.getWordCount().sortWordCounter();
                             complete = true;
                             if (analyze.isAllFail())
                                 complete = false;
@@ -161,11 +161,8 @@ public class Main {
     private static void findWord(Scanner scanner,Map<String,Long> wordCount){
         while(true) {
             String input = readText(scanner, "찾을 단어 > ");
-            String[] words = input.split(StringPatterns.DELIMETER);
-            List<String> list = Arrays.stream(words)
-                    .filter(str -> !str.isEmpty())//""제거
-                    .filter(str -> !str.matches(StringPatterns.NUMBER))//숫자로만 이루어진 단어 제거
-                    .map(String::toLowerCase)
+            String[] words = input.split(WordUtils.DELIMETER);
+            List<String> list = WordUtils.toWordStream(words)
                     .collect(Collectors.toCollection(ArrayList::new));
             if (list.size() != 1) {
                 System.out.println("단어 하나를 입력하세요.");

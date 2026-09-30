@@ -7,7 +7,9 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.*;
 import java.util.stream.Stream;
 
 public class Analyze {
@@ -16,7 +18,6 @@ public class Analyze {
     private int successCount;//성공 파일 수
     private int failCount;//실패 파일 수
     private int skipCount;//지원하지 않는 확장자 파일 수
-    private AnalyzerDTO analyzerDTO = new AnalyzerDTO();
     private WordCount wordCount = new WordCount();
     private boolean allFail = false;
     private double elapsedTime;
@@ -30,7 +31,10 @@ public class Analyze {
         inputPath = path;
         if(Files.isDirectory(p)) {//입력 경로가 디렉토리인 경우
             long startTime = System.nanoTime();
-            analyzeDirectory(p);
+            switch (WordUtils.PARELLEL_SETTING){
+                case GENERAL -> analyzeDirectory(p);
+                case PARELLEL -> parallelAnalyzeDirectory(p);
+            }
             long endTime = System.nanoTime();
             elapsedTime = (endTime - startTime) / 1_000_000.0;
         }
@@ -50,74 +54,123 @@ public class Analyze {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-
-        int totalFileNum = paths.size();
-
+        int totalFileNum = 0;
         for (Path path : paths){//각 디렉토리마다 처리
-            tryCount++;
-            String fileName = path.getFileName().toString();
-            int index = fileName.lastIndexOf(".");
-            if(index == -1){//확장자가 없는 경우
-                skipCount++;
-                continue;
-            }
-            //확장자(소문자로)
-            String extension = fileName.substring(index+1).toLowerCase();
-            FileAnalyzer fileAnalyzer;
-            switch (extension){//확장자에 따른 analyzer 주입
-                case "txt" ->{
-                    fileAnalyzer = new TxtFileAnalyzer();
+            if(Files.isDirectory(path)) continue;//하위 폴더는 분석하지 않음(건너뜀 포함x)
+            totalFileNum++;
+            AnalyzeResult result = commonAnalyze(path);
+            switch (result.getStatus()){
+                case SUCCESS -> {
+                    tryCount++;
+                    wordCount.addAllWord(result.getWordCount());
+                    successCount++;
                 }
-                case "csv" ->{
-                    fileAnalyzer = new CsvFileAnalyzer();
+                case FAIL -> {
+                    tryCount++;
+                    failCount++;
                 }
-                case "tsv" ->{
-                    fileAnalyzer = new TsvFileAnalyzer();
-                }
-                case "html" ->{
-                    fileAnalyzer = new HtmlFileAnalyzer();
-                }
-                default ->{
-                    skipCount++;
-                    continue;
-                }
-            }//switch 끝
-            try {
-                AnalyzerDTO temp = fileAnalyzer.process(path);
-                wordCount.addAllWord(temp.getWordCount());
-                successCount++;
-            }catch (FileReadException e){
-                failCount++;
-            }catch (DifferentColumnException e){//csv 헤더, 레코드 칼럼수 다름
-                failCount++;
-            } catch (EmptyCsvTsvException e){//빈 csv 파일
-                failCount++;
-            } catch (MissingTargetHeaderException e){//target 헤더가 존재x
-                failCount++;
-            } catch (InvalidHtmlException e){//html content가 1개가 아님
-                failCount++;
+                case SKIP -> skipCount++;
             }
         }//for문 끝
         if (totalFileNum == skipCount){
-            throw new UnsupportedFileException("디렉토리에 지원하는 확장자를 가진 파일이 없습니다.");
+            throw new UnsupportedFileException(p+": 디렉토리에 지원하는 확장자를 가진 파일이 없습니다.");
         }
-        if(totalFileNum == failCount){
+        if(successCount == 0){
             allFail=true;
         }
-        analyzerDTO.setWordCount(wordCount);
-        analyzerDTO.setTotalWordCount(wordCount.getTotalWord());
-        analyzerDTO.setDifferentWordCount(wordCount.getWordCount().size());
-    }//analyzeDirectory 메서드 끝
+    }
+
+    private void parallelAnalyzeDirectory(Path p) {
+
+        List<Path> paths;
+        // 디렉토리 밑의 파일 경로들 가져오기
+        try (Stream<Path> stream = Files.list(p)) {
+            paths = stream
+                    .filter(Files::isRegularFile)
+                    .toList();
+        } catch (IOException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        ExecutorService executor =
+                Executors.newFixedThreadPool(WordUtils.THREAD_POOL);
+        List<Future<AnalyzeResult>> futures =
+                new ArrayList<>();
+        // 파일 분석 작업 제출
+        for (Path path : paths) {
+            Future<AnalyzeResult> future =
+                    executor.submit(() -> commonAnalyze(path));
+            futures.add(future);
+        }
+        try {
+            // 분석 결과 받기
+            for (Future<AnalyzeResult> future : futures) {
+                try {
+                    AnalyzeResult result = future.get();
+                    switch (result.getStatus()) {
+                        case SUCCESS -> {
+                            tryCount++;
+                            successCount++;
+                            wordCount.addAllWord(result.getWordCount());
+                        }
+                        case FAIL -> {
+                            tryCount++;
+                            failCount++;
+                        }
+                        case SKIP -> {
+                            skipCount++;
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("파일 분석이 중단되었습니다.", e);
+                } catch (ExecutionException e) {
+                    throw new RuntimeException("파일 분석 중 예외가 발생했습니다.", e);
+                }
+            }
+        } finally {
+            executor.shutdown();
+        }
+        // 모든 파일이 SKIP
+        if (paths.size() == skipCount) {
+            throw new UnsupportedFileException(p + ": 디렉토리에 지원하는 확장자를 가진 파일이 없습니다.");
+        }
+        // 분석을 시도했지만 모두 실패
+        if (successCount == 0) {
+            allFail = true;
+        }
+    }
 
     private void analyzeFile(Path p){
-        tryCount++;
+        AnalyzeResult result = commonAnalyze(p);
+        switch (result.getStatus()){
+            case SUCCESS -> {
+                tryCount++;
+                wordCount = result.getWordCount();
+                successCount++;
+            }
+            case SKIP ->{
+                skipCount++;
+                throw new UnsupportedFileException(p+": 지원하는 확장자는 .txt, .csv, .tsv, html입니다.");
+            }
+            case FAIL -> {
+                tryCount++;
+                failCount++;
+            }
+        }
+        if(successCount == 0){
+            allFail=true;
+        }
+    }
+
+    private AnalyzeResult commonAnalyze(Path p){
         String fileName = p.getFileName().toString();
         int index = fileName.lastIndexOf(".");
         if(index == -1){//확장자가 없는 경우
-            throw new UnsupportedFileException("지원하는 확장자는 .txt, .csv, .tsv, html입니다.");
+            return new AnalyzeResult(new WordCount(),AnalyzeStatus.SKIP);
         }
-        String extension = fileName.substring(index+1).toLowerCase();
         FileAnalyzer fileAnalyzer;
+        String extension = fileName.substring(index+1).toLowerCase();
         switch (extension){
             case "txt" ->{
                 fileAnalyzer = new TxtFileAnalyzer();
@@ -128,32 +181,19 @@ public class Analyze {
             case "tsv" ->{
                 fileAnalyzer = new TsvFileAnalyzer();
             }
-            case "html" ->{
+            case "html","htm" ->{
                 fileAnalyzer = new HtmlFileAnalyzer();
             }
             default ->{
-                throw new UnsupportedFileException("지원하는 확장자는 .txt, .csv, .tsv, html입니다.");
+                return new AnalyzeResult(new WordCount(),AnalyzeStatus.SKIP);
             }
-        }//switch 끝
+        }
         try {
-            analyzerDTO = fileAnalyzer.process(p);
-            wordCount = analyzerDTO.getWordCount();
-            successCount++;
-        }catch (FileReadException e){
-            allFail=true;
-            failCount++;
-        }catch (DifferentColumnException e){//csv 헤더, 레코드 칼럼수 다름
-            allFail=true;
-            failCount++;
-        } catch (EmptyCsvTsvException e){//빈 csv 파일
-            allFail=true;
-            failCount++;
-        } catch (MissingTargetHeaderException e){//target 헤더가 존재x
-            allFail=true;
-            failCount++;
-        } catch (InvalidHtmlException e){//html content가 1개가 아님
-            allFail=true;
-            failCount++;
+            WordCount wc = fileAnalyzer.process(p);
+            return new AnalyzeResult(wc,AnalyzeStatus.SUCCESS);
+        }catch (FileReadException | CsvTsvException | InvalidHtmlException e){
+            System.out.println(e.getMessage());
+            return new AnalyzeResult(new WordCount(),AnalyzeStatus.FAIL);
         }
     }
 
@@ -181,11 +221,11 @@ public class Analyze {
         return elapsedTime;
     }
 
-    public AnalyzerDTO getAnalyzerDTO() {
-        return analyzerDTO;
-    }
-
     public boolean isAllFail() {
         return allFail;
+    }
+
+    public WordCount getWordCount() {
+        return wordCount;
     }
 }

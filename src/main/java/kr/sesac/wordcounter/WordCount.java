@@ -37,4 +37,7 @@ public class WordCount {
     public long getTotalWord() {
         return totalWord;
     }
+    public long getDifferentWord(){
+        return wordCount.size();
+    }
 }
