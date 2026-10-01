@@ -11,7 +11,7 @@ public class WordUtils {
     public static final List<String> CSV_TARGETS = List.of("text");
     public static final List<String> TSV_TARGETS = List.of("document");
     public static final String HTML_TARGET = "#content";
-    public static final SettingParellel PARELLEL_SETTING = SettingParellel.PARELLEL;
+    public static final SettingParellel PARELLEL_SETTING = SettingParellel.GENERAL;
     public static final int THREAD_POOL = 8;
 
     public static Stream<String> toWordStream(String[] words){
