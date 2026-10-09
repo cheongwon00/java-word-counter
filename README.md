@@ -16,7 +16,7 @@ Maven, jsoup, Apache Commons CSV를 몰라도 괜찮습니다. 필요한 설정�
 4. Project SDK를 **JDK 21**로 맞추고 Maven이 라이브러리를 다운로드할 때까지 기다립니다. 처음 한 번은 인터넷 연결이 필요하며, Maven을 따로 설치할 필요는 없습니다.
 5. [Main.java](src/main/java/kr/sesac/wordcounter/Main.java)를 열어 `main` 옆 **Run**을 누릅니다.
 
-정상 실행되면 [작은 TXT 샘플](samples/equivalent/basic.txt)의 세 줄이 출력됩니다.
+정상 실행되면 [작은 TXT 샘플](samples/equivalent/basic.txt)의 세 줄이 출력됩니다..
 
 ```text
 Java, java! 자바를 공부했다.
